@@ -23,10 +23,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 
+	"context"
 	"fmt"
+	"github.com/jackc/pgx/v4"
 	"github.com/spf13/cobra"
 	"net/http"
+	"os"
 )
 
 type loginResponseStruct struct {
@@ -38,6 +42,14 @@ type Range struct {
 	EndKey string `json:"end_key"`
 	StoreId int `json:"store_id"`
 	QueriesPerSecond float32 `json:"queries_per_second"`
+}
+
+type RangeWithNodeId struct {
+	NodeId string
+	RangeId int
+	EndKey string
+	StoreId int
+	QueriesPerSecond float32
 }
 
 type RangesByNodeId map[string][]Range
@@ -135,17 +147,20 @@ to quickly create a Cobra application.`,
 		var hotRangesResponse HotRangesResponse
 		json.Unmarshal(body, &hotRangesResponse)
 		//decoder := json.NewDecoder(bodyString)
-		fmt.Printf("Hot ranges response: %+v", hotRangesResponse)
 
 		nodeRanges := hotRangesResponse.RangesByNodeId
-		fmt.Printf("Node ranges: %+v", nodeRanges)
 
-		var allRanges []Range
+		var allRanges []RangeWithNodeId
 
 		for nodeId, ranges := range nodeRanges {
-			fmt.Println(nodeId)
 			for _, r := range ranges {
-				allRanges = append(allRanges, r)
+				allRanges = append(allRanges, RangeWithNodeId{
+					NodeId: nodeId,
+					RangeId: r.RangeId,
+					EndKey: r.EndKey,
+					StoreId: r.StoreId,
+					QueriesPerSecond: r.QueriesPerSecond,
+				})
 			}
 		}
 
@@ -153,7 +168,64 @@ to quickly create a Cobra application.`,
 			return allRanges[i].QueriesPerSecond > allRanges[j].QueriesPerSecond
 		})
 
-		fmt.Printf("%+v", allRanges[0:10])
+		conn, err := pgx.Connect(context.Background(), PgUrl)
+		if err != nil {
+			return err
+		}
+		defer conn.Close(context.Background())
+
+		w := tabwriter.NewWriter(os.Stdout, 7, 0, 3, ' ', tabwriter.AlignRight)
+		fmt.Fprintln(w,"Node\tRange ID\tQPS\tStore\tDB\tTable\tStart Key\tEnd Key\t")
+
+		for _, r := range allRanges[0:10] {
+			var tableId int
+			var systemTableName string
+			var startPretty string
+			var endPretty string
+			err = conn.QueryRow(
+				context.Background(),
+				"select table_id, table_name, start_pretty, end_pretty from crdb_internal.ranges where range_id = $1", r.RangeId,
+				).Scan(&tableId, &systemTableName, &startPretty, &endPretty)
+			if err != nil {
+				return err
+			}
+
+			var databaseName string
+			var tableName string
+
+			if tableId == 0 {
+				tableName = systemTableName
+			} else {
+				err = conn.QueryRow(
+					context.Background(),
+					"select database_name, name from crdb_internal.tables where table_id = $1", tableId,
+				).Scan(&databaseName, &tableName)
+				if err != nil {
+					return err
+				}
+			}
+
+			maxLength := 30
+			var startPrettyStr string
+			if len(startPretty) <= maxLength {
+				startPrettyStr = startPretty
+			} else {
+				startPrettyStr = fmt.Sprintf("%s...", startPretty[0:maxLength])
+			}
+			var endPrettyStr string
+			if len(endPretty) <= maxLength {
+				endPrettyStr = endPretty
+			} else {
+				endPrettyStr = fmt.Sprintf("%s...", endPretty[0:maxLength])
+			}
+			fmt.Fprintf(w,"%s\t%d\t%.2f\t%d\t%s\t%s\t%s\t%s\t\n", r.NodeId, r.RangeId,
+				r.QueriesPerSecond, r.StoreId, databaseName, tableName,
+				startPrettyStr,
+				endPrettyStr)
+		}
+		w.Flush()
+
+		// select * from crdb_internal.ranges where range_id = <range>;
 
 		return nil
 	},

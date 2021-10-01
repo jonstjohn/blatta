@@ -37,6 +37,7 @@ to quickly create a Cobra application.`,
 }
 
 var ApiUrl string
+var PgUrl string
 var Username string
 var Password string
 var Insecure bool
@@ -53,6 +54,7 @@ func init() {
 	monitorCmd.PersistentFlags().StringVarP(&Username, "username", "u", "", "USERNAME")
 	monitorCmd.PersistentFlags().StringVarP(&Password, "password", "p", "", "PASSWORD")
 	monitorCmd.PersistentFlags().BoolVar(&Insecure, "insecure", false, "Skip TLS certificate verification")
+	monitorCmd.PersistentFlags().StringVar(&PgUrl, "pgurl", "", "")
 
 	monitorCmd.MarkFlagRequired("url")
 	//(&Url, "url", "URL", "Cockroach Cluster API URL")
