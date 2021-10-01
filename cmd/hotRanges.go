@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -32,6 +33,20 @@ type loginResponseStruct struct {
 	Session string
 }
 
+type Range struct {
+	RangeId int `json:"range_id"`
+	EndKey string `json:"end_key"`
+	StoreId int `json:"store_id"`
+	QueriesPerSecond float32 `json:"queries_per_second"`
+}
+
+type RangesByNodeId map[string][]Range
+
+type HotRangesResponse struct {
+	RangesByNodeId RangesByNodeId `json:"ranges_by_node_id"`
+	Next string
+}
+
 func HttpClient(apiUrl string, insecure bool) *http.Client {
 	customTransport := &(*http.DefaultTransport.(*http.Transport)) // make shallow copy
 	if insecure {
@@ -40,14 +55,19 @@ func HttpClient(apiUrl string, insecure bool) *http.Client {
 	return &http.Client{Transport: customTransport}
 }
 
-func Login(apiUrl string, username string, password string, insecure bool) string {
+func Login(apiUrl string, username string, password string, insecure bool) (string, error) {
 
 	resource := "/api/v2/login/"
 	data := url.Values{}
 	data.Set("username", Username)
 	data.Set("password", Password)
 
-	u, _ := url.ParseRequestURI(apiUrl)
+	u, error := url.ParseRequestURI(apiUrl)
+
+	if error != nil {
+		return "", error
+	}
+
 	u.Path = resource
 	urlStr := u.String()
 
@@ -77,7 +97,7 @@ func Login(apiUrl string, username string, password string, insecure bool) strin
 		apiKey = t.Session
 	}
 
-	return apiKey
+	return apiKey, nil
 }
 
 // hotRangesCmd represents the hotRanges command
@@ -90,9 +110,13 @@ and usage of using your command. For example:
 Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 
-		apiKey := Login(ApiUrl, Username, Password, Insecure)
+		apiKey, err := Login(ApiUrl, Username, Password, Insecure)
+
+		if err != nil {
+			return err
+		}
 
 		hotRangeResource := "/api/v2/ranges/hot/"
 		uHr, _ := url.ParseRequestURI(ApiUrl)
@@ -102,20 +126,36 @@ to quickly create a Cobra application.`,
 		r, _ := http.NewRequest(http.MethodGet, urlStrHr, nil) // URL-encoded payload
 		r.Header.Add("X-Cockroach-API-Session", apiKey)
 
-		/*
-		customTransport := &(*http.DefaultTransport.(*http.Transport)) // make shallow copy
-		if Insecure {
-			customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		}
-		client := &http.Client{Transport: customTransport}
-		 */
-
 		client := HttpClient(ApiUrl, Insecure)
 
 		resp, _ := client.Do(r)
 		body, _ := ioutil.ReadAll(resp.Body)
-		bodyString := string(body)
-		fmt.Println(bodyString)
+		//bodyString := string(body)
+
+		var hotRangesResponse HotRangesResponse
+		json.Unmarshal(body, &hotRangesResponse)
+		//decoder := json.NewDecoder(bodyString)
+		fmt.Printf("Hot ranges response: %+v", hotRangesResponse)
+
+		nodeRanges := hotRangesResponse.RangesByNodeId
+		fmt.Printf("Node ranges: %+v", nodeRanges)
+
+		var allRanges []Range
+
+		for nodeId, ranges := range nodeRanges {
+			fmt.Println(nodeId)
+			for _, r := range ranges {
+				allRanges = append(allRanges, r)
+			}
+		}
+
+		sort.SliceStable(allRanges, func(i, j int) bool {
+			return allRanges[i].QueriesPerSecond > allRanges[j].QueriesPerSecond
+		})
+
+		fmt.Printf("%+v", allRanges[0:10])
+
+		return nil
 	},
 }
 

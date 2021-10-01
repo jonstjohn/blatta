@@ -21,9 +21,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// monitorCmd represents the monitor command
-var monitorCmd = &cobra.Command{
-	Use:   "monitor",
+// analyzeCmd represents the analyze command
+var analyzeCmd = &cobra.Command{
+	Use:   "analyze",
 	Short: "A brief description of your command",
 	Long: `A longer description that spans multiple lines and likely contains examples
 and usage of using your command. For example:
@@ -32,32 +32,24 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("monitor called")
+		fmt.Println("analyze called")
+		fmt.Println(DebugPath)
 	},
 }
 
-var ApiUrl string
-var Username string
-var Password string
-var Insecure bool
+var DebugPath string
 
 func init() {
-	rootCmd.AddCommand(monitorCmd)
+	rootCmd.AddCommand(analyzeCmd)
 
 	// Here you will define your flags and configuration settings.
 
 	// Cobra supports Persistent Flags which will work for this command
 	// and all subcommands, e.g.:
-	// monitorCmd.PersistentFlags().String("foo", "", "A help for foo")
-	monitorCmd.PersistentFlags().StringVar(&ApiUrl, "url", "", "")
-	monitorCmd.PersistentFlags().StringVarP(&Username, "username", "u", "", "USERNAME")
-	monitorCmd.PersistentFlags().StringVarP(&Password, "password", "p", "", "PASSWORD")
-	monitorCmd.PersistentFlags().BoolVar(&Insecure, "insecure", false, "Skip TLS certificate verification")
-
-	monitorCmd.MarkFlagRequired("url")
-	//(&Url, "url", "URL", "Cockroach Cluster API URL")
+	// analyzeCmd.PersistentFlags().String("foo", "", "A help for foo")
 
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
-	// monitorCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	// analyzeCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	analyzeCmd.PersistentFlags().StringVarP(&DebugPath, "path", "p", "", "Path to debug file or folder")
 }
