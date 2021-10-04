@@ -41,6 +41,8 @@ var PgUrl string
 var Username string
 var Password string
 var Insecure bool
+var Count int
+var Wait int
 
 func init() {
 	rootCmd.AddCommand(monitorCmd)
@@ -55,6 +57,8 @@ func init() {
 	monitorCmd.PersistentFlags().StringVarP(&Password, "password", "p", "", "PASSWORD")
 	monitorCmd.PersistentFlags().BoolVar(&Insecure, "insecure", false, "Skip TLS certificate verification")
 	monitorCmd.PersistentFlags().StringVar(&PgUrl, "pgurl", "", "")
+	monitorCmd.PersistentFlags().IntVarP(&Count, "count", "c", 0, "Number of iterations to run (0=unlimited)")
+	monitorCmd.PersistentFlags().IntVarP(&Wait, "wait", "w", 30, "Seconds to wait between iterations")
 
 	monitorCmd.MarkFlagRequired("url")
 	//(&Url, "url", "URL", "Cockroach Cluster API URL")

@@ -19,11 +19,13 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"io/ioutil"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"context"
 	"fmt"
@@ -37,25 +39,28 @@ type loginResponseStruct struct {
 	Session string
 }
 
-type Range struct {
+type RangeResponse struct {
 	RangeId int `json:"range_id"`
 	EndKey string `json:"end_key"`
 	StoreId int `json:"store_id"`
 	QueriesPerSecond float32 `json:"queries_per_second"`
 }
 
-type RangeWithNodeId struct {
+type Range struct {
 	NodeId string
 	RangeId int
-	EndKey string
 	StoreId int
 	QueriesPerSecond float32
+	Database string
+	TableName string
+	StartPretty string
+	EndPretty string
 }
 
-type RangesByNodeId map[string][]Range
+type RangesByNodeIdResponse map[string][]RangeResponse
 
 type HotRangesResponse struct {
-	RangesByNodeId RangesByNodeId `json:"ranges_by_node_id"`
+	RangesByNodeId RangesByNodeIdResponse `json:"ranges_by_node_id"`
 	Next string
 }
 
@@ -112,6 +117,124 @@ func Login(apiUrl string, username string, password string, insecure bool) (stri
 	return apiKey, nil
 }
 
+func getHotRangesResponse(apiKey string) HotRangesResponse {
+	hotRangeResource := "/api/v2/ranges/hot/"
+	uHr, _ := url.ParseRequestURI(ApiUrl)
+	uHr.Path = hotRangeResource
+	urlStrHr := uHr.String()
+
+	r, _ := http.NewRequest(http.MethodGet, urlStrHr, nil) // URL-encoded payload
+	r.Header.Add("X-Cockroach-API-Session", apiKey)
+
+	client := HttpClient(ApiUrl, Insecure)
+
+	resp, _ := client.Do(r)
+	body, _ := ioutil.ReadAll(resp.Body)
+	//bodyString := string(body)
+
+	var hotRangesResponse HotRangesResponse
+	json.Unmarshal(body, &hotRangesResponse)
+	return hotRangesResponse
+}
+
+func sortRangesWithNodeId(nodeRanges RangesByNodeIdResponse) []Range {
+	// Convert ranges to include the node ID which we want attached to each range
+	var allRanges []Range
+
+	for nodeId, ranges := range nodeRanges {
+		for _, r := range ranges {
+			allRanges = append(allRanges, Range{
+				NodeId: nodeId,
+				RangeId: r.RangeId,
+				StoreId: r.StoreId,
+				QueriesPerSecond: r.QueriesPerSecond,
+			})
+		}
+	}
+
+	// Sort ranges from highest QPS to lowest
+	sort.SliceStable(allRanges, func(i, j int) bool {
+		return allRanges[i].QueriesPerSecond > allRanges[j].QueriesPerSecond
+	})
+
+	return allRanges
+}
+
+func populateAdditionalRangeInfo(allRanges []Range) error {
+	conn, err := pgx.Connect(context.Background(), PgUrl)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(context.Background())
+
+	for i, r := range allRanges {
+		var tableId int
+		var systemTableName string
+		var startPretty string
+		var endPretty string
+		err = conn.QueryRow(
+			context.Background(),
+			"select table_id, table_name, start_pretty, end_pretty from crdb_internal.ranges where range_id = $1", r.RangeId,
+		).Scan(&tableId, &systemTableName, &startPretty, &endPretty)
+		if err != nil {
+			return err
+		}
+
+		var databaseName string
+		var tableName string
+
+		if tableId == 0 {
+			tableName = systemTableName
+		} else {
+			err = conn.QueryRow(
+				context.Background(),
+				"select database_name, name from crdb_internal.tables where table_id = $1", tableId,
+			).Scan(&databaseName, &tableName)
+			if err != nil {
+				return err
+			}
+		}
+
+		maxLength := 30
+		var startPrettyStr string
+		if len(startPretty) <= maxLength {
+			startPrettyStr = startPretty
+		} else {
+			startPrettyStr = fmt.Sprintf("%s...", startPretty[0:maxLength])
+		}
+		var endPrettyStr string
+		if len(endPretty) <= maxLength {
+			endPrettyStr = endPretty
+		} else {
+			endPrettyStr = fmt.Sprintf("%s...", endPretty[0:maxLength])
+		}
+
+		r.Database = databaseName
+		r.TableName = tableName
+		r.StartPretty = startPrettyStr
+		r.EndPretty = endPrettyStr
+		allRanges[i] = r
+	}
+
+	return nil
+}
+
+func printRanges(ranges []Range) {
+
+	t := time.Now()
+	fmt.Println(t.Format(time.RFC3339))
+
+	w := tabwriter.NewWriter(os.Stdout, 7, 0, 3, ' ', tabwriter.AlignRight)
+	fmt.Fprintln(w,"Node\tRange ID\tQPS\tStore\tDB\tTable\tStart Key\tEnd Key\t")
+
+	for _, r := range ranges {
+		fmt.Fprintf(w,"%s\t%d\t%.2f\t%d\t%s\t%s\t%s\t%s\t\n", r.NodeId, r.RangeId,
+			r.QueriesPerSecond, r.StoreId, r.Database, r.TableName,
+			r.StartPretty, r.EndPretty)
+	}
+	w.Flush()
+}
+
 // hotRangesCmd represents the hotRanges command
 var hotRangesCmd = &cobra.Command{
 	Use:   "hotRanges",
@@ -124,108 +247,31 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
+		// Login with username and password to get API key
 		apiKey, err := Login(ApiUrl, Username, Password, Insecure)
-
 		if err != nil {
 			return err
 		}
 
-		hotRangeResource := "/api/v2/ranges/hot/"
-		uHr, _ := url.ParseRequestURI(ApiUrl)
-		uHr.Path = hotRangeResource
-		urlStrHr := uHr.String()
-
-		r, _ := http.NewRequest(http.MethodGet, urlStrHr, nil) // URL-encoded payload
-		r.Header.Add("X-Cockroach-API-Session", apiKey)
-
-		client := HttpClient(ApiUrl, Insecure)
-
-		resp, _ := client.Do(r)
-		body, _ := ioutil.ReadAll(resp.Body)
-		//bodyString := string(body)
-
-		var hotRangesResponse HotRangesResponse
-		json.Unmarshal(body, &hotRangesResponse)
-		//decoder := json.NewDecoder(bodyString)
-
-		nodeRanges := hotRangesResponse.RangesByNodeId
-
-		var allRanges []RangeWithNodeId
-
-		for nodeId, ranges := range nodeRanges {
-			for _, r := range ranges {
-				allRanges = append(allRanges, RangeWithNodeId{
-					NodeId: nodeId,
-					RangeId: r.RangeId,
-					EndKey: r.EndKey,
-					StoreId: r.StoreId,
-					QueriesPerSecond: r.QueriesPerSecond,
-				})
-			}
+		// Iterate for "Count" iterations, or use max int if zero
+		iterations := Count
+		if Count == 0 {
+			iterations = math.MaxInt8
 		}
+		for i := 1; i < iterations; i++ {
 
-		sort.SliceStable(allRanges, func(i, j int) bool {
-			return allRanges[i].QueriesPerSecond > allRanges[j].QueriesPerSecond
-		})
+			// Get ranges by node ID from the response (page of response)
+			hotRangesResponse := getHotRangesResponse(apiKey)
 
-		conn, err := pgx.Connect(context.Background(), PgUrl)
-		if err != nil {
-			return err
+			// Sort ranges from highest QPS to lowest and add node ID, take first 10
+			allRanges := sortRangesWithNodeId(hotRangesResponse.RangesByNodeId)[0:10]
+
+			populateAdditionalRangeInfo(allRanges)
+			printRanges(allRanges)
+
+			time.Sleep(time.Duration(Wait) * time.Second)
+
 		}
-		defer conn.Close(context.Background())
-
-		w := tabwriter.NewWriter(os.Stdout, 7, 0, 3, ' ', tabwriter.AlignRight)
-		fmt.Fprintln(w,"Node\tRange ID\tQPS\tStore\tDB\tTable\tStart Key\tEnd Key\t")
-
-		for _, r := range allRanges[0:10] {
-			var tableId int
-			var systemTableName string
-			var startPretty string
-			var endPretty string
-			err = conn.QueryRow(
-				context.Background(),
-				"select table_id, table_name, start_pretty, end_pretty from crdb_internal.ranges where range_id = $1", r.RangeId,
-				).Scan(&tableId, &systemTableName, &startPretty, &endPretty)
-			if err != nil {
-				return err
-			}
-
-			var databaseName string
-			var tableName string
-
-			if tableId == 0 {
-				tableName = systemTableName
-			} else {
-				err = conn.QueryRow(
-					context.Background(),
-					"select database_name, name from crdb_internal.tables where table_id = $1", tableId,
-				).Scan(&databaseName, &tableName)
-				if err != nil {
-					return err
-				}
-			}
-
-			maxLength := 30
-			var startPrettyStr string
-			if len(startPretty) <= maxLength {
-				startPrettyStr = startPretty
-			} else {
-				startPrettyStr = fmt.Sprintf("%s...", startPretty[0:maxLength])
-			}
-			var endPrettyStr string
-			if len(endPretty) <= maxLength {
-				endPrettyStr = endPretty
-			} else {
-				endPrettyStr = fmt.Sprintf("%s...", endPretty[0:maxLength])
-			}
-			fmt.Fprintf(w,"%s\t%d\t%.2f\t%d\t%s\t%s\t%s\t%s\t\n", r.NodeId, r.RangeId,
-				r.QueriesPerSecond, r.StoreId, databaseName, tableName,
-				startPrettyStr,
-				endPrettyStr)
-		}
-		w.Flush()
-
-		// select * from crdb_internal.ranges where range_id = <range>;
 
 		return nil
 	},
