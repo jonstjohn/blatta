@@ -2,9 +2,10 @@ package api
 
 import (
 	"crypto/tls"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -13,6 +14,19 @@ import (
 
 type loginResponseStruct struct {
 	Session string
+}
+
+type NodeMetrics struct {
+	SysCpuUserPercent float32 `json:"sys.cpu.user.percent"`
+}
+
+type Node struct {
+	NodeId int `json:"node_id"`
+	Metrics NodeMetrics `json:"metrics"`
+}
+
+type NodesResponse struct {
+	Nodes []Node `json:"nodes"`
 }
 
 func HttpClient(apiUrl string, insecure bool) *http.Client {
@@ -68,4 +82,24 @@ func Login(apiUrl string, username string, password string, insecure bool) (stri
 	}
 
 	return apiKey, nil
+}
+
+func GetNodes(apiUrl string, apiKey string, insecure bool) []Node {
+	resource := "/api/v2/nodes/"
+	uHr, _ := url.ParseRequestURI(apiUrl)
+	uHr.Path = resource
+	urlStrHr := uHr.String()
+
+	r, _ := http.NewRequest(http.MethodGet, urlStrHr, nil) // URL-encoded payload
+	r.Header.Add("X-Cockroach-API-Session", apiKey)
+
+	client := HttpClient(apiUrl, insecure)
+
+	resp, _ := client.Do(r)
+	body, _ := ioutil.ReadAll(resp.Body)
+
+	var response NodesResponse
+	json.Unmarshal(body, &response)
+	fmt.Println(response)
+	return response.Nodes
 }
