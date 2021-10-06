@@ -16,14 +16,12 @@ limitations under the License.
 package cmd
 
 import (
-	"crypto/tls"
+	"blatta/api"
 	"encoding/json"
 	"io/ioutil"
 	"math"
 	"net/url"
 	"sort"
-	"strconv"
-	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -35,9 +33,9 @@ import (
 	"os"
 )
 
-type loginResponseStruct struct {
-	Session string
-}
+//type loginResponseStruct struct {
+//	Session string
+//}
 
 type RangeResponse struct {
 	RangeId int `json:"range_id"`
@@ -64,60 +62,8 @@ type HotRangesResponse struct {
 	Next string
 }
 
-func HttpClient(apiUrl string, insecure bool) *http.Client {
-	customTransport := &(*http.DefaultTransport.(*http.Transport)) // make shallow copy
-	if insecure {
-		customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	}
-	return &http.Client{Transport: customTransport}
-}
-
-func Login(apiUrl string, username string, password string, insecure bool) (string, error) {
-
-	resource := "/api/v2/login/"
-	data := url.Values{}
-	data.Set("username", Username)
-	data.Set("password", Password)
-
-	u, error := url.ParseRequestURI(apiUrl)
-
-	if error != nil {
-		return "", error
-	}
-
-	u.Path = resource
-	urlStr := u.String()
-
-	client := HttpClient(ApiUrl, Insecure)
-
-	r, _ := http.NewRequest(http.MethodPost, urlStr, strings.NewReader(data.Encode())) // URL-encoded payload
-	r.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-	r.Header.Add("Content-Length", strconv.Itoa(len(data.Encode())))
-
-	resp, err := client.Do(r)
-
-	if err != nil {
-		panic(err)
-	}
-	var apiKey string
-
-	if resp.StatusCode == http.StatusOK {
-
-		decoder := json.NewDecoder(resp.Body)
-		var t loginResponseStruct
-		err := decoder.Decode(&t)
-
-		if err != nil {
-			panic(err)
-		}
-
-		apiKey = t.Session
-	}
-
-	return apiKey, nil
-}
-
 func getHotRangesResponse(apiKey string) HotRangesResponse {
+
 	hotRangeResource := "/api/v2/ranges/hot/"
 	uHr, _ := url.ParseRequestURI(ApiUrl)
 	uHr.Path = hotRangeResource
@@ -126,11 +72,10 @@ func getHotRangesResponse(apiKey string) HotRangesResponse {
 	r, _ := http.NewRequest(http.MethodGet, urlStrHr, nil) // URL-encoded payload
 	r.Header.Add("X-Cockroach-API-Session", apiKey)
 
-	client := HttpClient(ApiUrl, Insecure)
+	client := api.HttpClient(ApiUrl, Insecure)
 
 	resp, _ := client.Do(r)
 	body, _ := ioutil.ReadAll(resp.Body)
-	//bodyString := string(body)
 
 	var hotRangesResponse HotRangesResponse
 	json.Unmarshal(body, &hotRangesResponse)
@@ -248,7 +193,7 @@ to quickly create a Cobra application.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
 		// Login with username and password to get API key
-		apiKey, err := Login(ApiUrl, Username, Password, Insecure)
+		apiKey, err := api.Login(ApiUrl, Username, Password, Insecure)
 		if err != nil {
 			return err
 		}
