@@ -17,6 +17,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/spf13/viper"
 
 	"github.com/spf13/cobra"
 )
@@ -61,6 +62,15 @@ func init() {
 	monitorCmd.PersistentFlags().IntVarP(&Wait, "wait", "w", 30, "Seconds to wait between iterations")
 
 	monitorCmd.MarkFlagRequired("url")
+
+	// This allows the command line flags to overwrite the configuration file values
+	viper.BindPFlag("url", monitorCmd.PersistentFlags().Lookup("url"))
+	viper.BindPFlag("username", monitorCmd.PersistentFlags().Lookup("username"))
+	viper.BindPFlag("password", monitorCmd.PersistentFlags().Lookup("password"))
+	viper.BindPFlag("insecure", monitorCmd.PersistentFlags().Lookup("insecure"))
+	viper.BindPFlag("count", monitorCmd.PersistentFlags().Lookup("count"))
+	viper.BindPFlag("wait", monitorCmd.PersistentFlags().Lookup("wait"))
+	viper.BindPFlag("pgurl", monitorCmd.PersistentFlags().Lookup("pgurl"))
 	//(&Url, "url", "URL", "Cockroach Cluster API URL")
 
 	// Cobra supports local flags which will only run when this command

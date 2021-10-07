@@ -18,6 +18,7 @@ package cmd
 import (
 	"blatta/api"
 	"encoding/json"
+	"github.com/spf13/viper"
 	"io/ioutil"
 	"math"
 	"net/url"
@@ -62,17 +63,17 @@ type HotRangesResponse struct {
 	Next string
 }
 
-func getHotRangesResponse(apiKey string) HotRangesResponse {
+func getHotRangesResponse(apiKey string, apiUrl string) HotRangesResponse {
 
 	hotRangeResource := "/api/v2/ranges/hot/"
-	uHr, _ := url.ParseRequestURI(ApiUrl)
+	uHr, _ := url.ParseRequestURI(apiUrl)
 	uHr.Path = hotRangeResource
 	urlStrHr := uHr.String()
 
 	r, _ := http.NewRequest(http.MethodGet, urlStrHr, nil) // URL-encoded payload
 	r.Header.Add("X-Cockroach-API-Session", apiKey)
 
-	client := api.HttpClient(ApiUrl, Insecure)
+	client := api.HttpClient(apiUrl, Insecure)
 
 	resp, _ := client.Do(r)
 	body, _ := ioutil.ReadAll(resp.Body)
@@ -105,8 +106,8 @@ func sortRangesWithNodeId(nodeRanges RangesByNodeIdResponse) []Range {
 	return allRanges
 }
 
-func populateAdditionalRangeInfo(allRanges []Range) error {
-	conn, err := pgx.Connect(context.Background(), PgUrl)
+func populateAdditionalRangeInfo(allRanges []Range, pgUrl string) error {
+	conn, err := pgx.Connect(context.Background(), pgUrl)
 	if err != nil {
 		return err
 	}
@@ -192,8 +193,15 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 
+		apiUrl := viper.GetString("url")
+		username := viper.GetString("username")
+		password := viper.GetString("password")
+		//cacert := viper.GetString("cacert")
+		pgUrl := viper.GetString("pgurl")
+		insecure := viper.GetBool("insecure")
+
 		// Login with username and password to get API key
-		apiKey, err := api.Login(ApiUrl, Username, Password, Insecure)
+		apiKey, err := api.Login(apiUrl, username, password, insecure)
 		if err != nil {
 			return err
 		}
@@ -206,12 +214,12 @@ to quickly create a Cobra application.`,
 		for i := 1; i < iterations; i++ {
 
 			// Get ranges by node ID from the response (page of response)
-			hotRangesResponse := getHotRangesResponse(apiKey)
+			hotRangesResponse := getHotRangesResponse(apiKey, apiUrl)
 
 			// Sort ranges from highest QPS to lowest and add node ID, take first 10
 			allRanges := sortRangesWithNodeId(hotRangesResponse.RangesByNodeId)[0:10]
 
-			populateAdditionalRangeInfo(allRanges)
+			populateAdditionalRangeInfo(allRanges, pgUrl)
 			printRanges(allRanges)
 
 			time.Sleep(time.Duration(Wait) * time.Second)
