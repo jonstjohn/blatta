@@ -16,18 +16,17 @@ limitations under the License.
 package cmd
 
 import (
-	"blatta/api"
 	"fmt"
-	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"os"
-	"text/tabwriter"
-	"time"
+	"os/exec"
+
+	"github.com/spf13/cobra"
 )
 
-// nodesCmd represents the nodes command
-var nodesCmd = &cobra.Command{
-	Use:   "nodes",
+// sqlCmd represents the sql command
+var sqlCmd = &cobra.Command{
+	Use:   "sql",
 	Short: "A brief description of your command",
 	Long: `A longer description that spans multiple lines and likely contains examples
 and usage of using your command. For example:
@@ -35,51 +34,30 @@ and usage of using your command. For example:
 Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-
-		apiUrl := viper.GetString("url")
-		username := viper.GetString("username")
-		password := viper.GetString("password")
-		//cacert := viper.GetString("cacert")
-		//pgUrl := viper.GetString("pgurl")
-		insecure := viper.GetBool("insecure")
-
-		apiKey, err := api.Login(apiUrl, username, password, insecure)
-		if err != nil {
-			return err
-		}
-
-		nodes := api.GetNodes(apiUrl, apiKey, insecure)
-		printNodes(nodes)
-
-		return nil
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("sql called")
+		pgUrl := viper.GetString("pgurl")
+		fmt.Println(pgUrl)
+		c := exec.Command("bash", "-c", fmt.Sprintf("cockroach sql --url '%v'", pgUrl))
+		c.Stdout = os.Stdout
+		c.Stdin = os.Stdin
+		c.Stderr = os.Stderr
+		c.Run()
 	},
 }
 
-func printNodes(nodes []api.Node) {
-
-	t := time.Now()
-	fmt.Println(t.Format(time.RFC3339))
-
-	w := tabwriter.NewWriter(os.Stdout, 7, 0, 3, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(w,"Node\tCPU\t")
-
-	for _, n := range nodes {
-		fmt.Fprintf(w,"%d\t%.1f%%\t\n", n.NodeId, n.Metrics.SysCpuUserPercent*100)
-	}
-	w.Flush()
-}
-
 func init() {
-	monitorCmd.AddCommand(nodesCmd)
+	rootCmd.AddCommand(sqlCmd)
 
 	// Here you will define your flags and configuration settings.
 
 	// Cobra supports Persistent Flags which will work for this command
 	// and all subcommands, e.g.:
-	// nodesCmd.PersistentFlags().String("foo", "", "A help for foo")
+	// sqlCmd.PersistentFlags().String("foo", "", "A help for foo")
 
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
-	// nodesCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	// sqlCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	sqlCmd.PersistentFlags().StringVar(&PgUrl, "url", "", "")
+	viper.BindPFlag("pgurl", sqlCmd.PersistentFlags().Lookup("pgurl"))
 }

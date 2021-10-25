@@ -116,12 +116,13 @@ func populateAdditionalRangeInfo(allRanges []Range, pgUrl string) error {
 	for i, r := range allRanges {
 		var tableId int
 		var systemTableName string
+		var indexName string
 		var startPretty string
 		var endPretty string
 		err = conn.QueryRow(
 			context.Background(),
-			"select table_id, table_name, start_pretty, end_pretty from crdb_internal.ranges where range_id = $1", r.RangeId,
-		).Scan(&tableId, &systemTableName, &startPretty, &endPretty)
+			"select table_id, table_name, index_name, start_pretty, end_pretty from crdb_internal.ranges where range_id = $1", r.RangeId,
+		).Scan(&tableId, &systemTableName, &indexName, &startPretty, &endPretty)
 		if err != nil {
 			return err
 		}
@@ -155,6 +156,9 @@ func populateAdditionalRangeInfo(allRanges []Range, pgUrl string) error {
 			endPrettyStr = fmt.Sprintf("%s...", endPretty[0:maxLength])
 		}
 
+		if len(indexName) > 0 {
+			tableName = fmt.Sprintf("%s@%s", tableName, indexName)
+		}
 		r.Database = databaseName
 		r.TableName = tableName
 		r.StartPretty = startPrettyStr
@@ -171,7 +175,7 @@ func printRanges(ranges []Range) {
 	fmt.Println(t.Format(time.RFC3339))
 
 	w := tabwriter.NewWriter(os.Stdout, 7, 0, 3, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(w,"Node\tRange ID\tQPS\tStore\tDB\tTable\tStart Key\tEnd Key\t")
+	fmt.Fprintln(w,"Node\tRange ID\tQPS\tStore\tDB\tTable / Index\tStart Key\tEnd Key\t")
 
 	for _, r := range ranges {
 		fmt.Fprintf(w,"%s\t%d\t%.2f\t%d\t%s\t%s\t%s\t%s\t\n", r.NodeId, r.RangeId,
