@@ -223,7 +223,11 @@ to quickly create a Cobra application.`,
 			// Sort ranges from highest QPS to lowest and add node ID, take first 10
 			allRanges := sortRangesWithNodeId(hotRangesResponse.RangesByNodeId)[0:10]
 
-			populateAdditionalRangeInfo(allRanges, pgUrl)
+			err := populateAdditionalRangeInfo(allRanges, pgUrl)
+			if err != nil {
+				fmt.Println(err)
+				return err
+			}
 			printRanges(allRanges)
 
 			time.Sleep(time.Duration(Wait) * time.Second)

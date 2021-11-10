@@ -16,7 +16,10 @@ limitations under the License.
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"io/ioutil"
+	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -31,9 +34,41 @@ and usage of using your command. For example:
 Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("debugZip called")
+		fmt.Println(cmd.Flag("filepath").Value)
+		filepath, _ := cmd.Flags().GetString("filepath") //cmd.Flag("filepath").Value
+
+		_, err := isDebugZip(filepath)
+		if err != nil {
+			return err
+		}
+
+		return nil
 	},
+}
+
+func isDebugZip(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+
+	files, err := ioutil.ReadDir(path)
+	if err != nil {
+		return false, err
+	}
+
+	for _, file := range files {
+		if file.Name() == "nodes.json" {
+			return true, nil
+		}
+	}
+
+	return false, errors.New("not a valid debug zip - could not find nodes.json")
+
+
+	return true, nil
 }
 
 func init() {
@@ -48,4 +83,6 @@ func init() {
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
 	// debugZipCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	debugZipCmd.Flags().String("filepath", "", "Debug zip file path")
+	debugZipCmd.MarkFlagRequired("filepath")
 }

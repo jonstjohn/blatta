@@ -58,6 +58,6 @@ func init() {
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
 	// sqlCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
-	sqlCmd.PersistentFlags().StringVar(&PgUrl, "url", "", "")
+	sqlCmd.PersistentFlags().StringVar(&PgUrl, "pgurl", "", "")
 	viper.BindPFlag("pgurl", sqlCmd.PersistentFlags().Lookup("pgurl"))
 }

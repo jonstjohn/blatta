@@ -12,7 +12,7 @@ This sounded like a great name for a tool to use with CockroachDB.
 Blatta uses a number of command-line flags that vary depending on the command that is executed.
 
 In most cases, a configuration file for each CockroachDB environment is the easiest
-approaches to managing the longer command-line flags.
+approach to managing the longer command-line flags.
 
 To view all of the flags available to a specific command, run `blatta [COMMAND] [SUBCOMMAND] --help`.
 For example, to view all of the command-line flags available to the `monitor hotRanges` command,
