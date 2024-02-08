@@ -60,6 +60,7 @@ func init() {
 	monitorCmd.PersistentFlags().StringVar(&PgUrl, "pgurl", "", "")
 	monitorCmd.PersistentFlags().IntVarP(&Count, "count", "c", 0, "Number of iterations to run (0=unlimited)")
 	monitorCmd.PersistentFlags().IntVarP(&Wait, "wait", "w", 30, "Seconds to wait between iterations")
+	monitorCmd.PersistentFlags().String("format", "table", "Output format, table or csv")
 
 	monitorCmd.MarkFlagRequired("url")
 
@@ -71,6 +72,7 @@ func init() {
 	viper.BindPFlag("count", monitorCmd.PersistentFlags().Lookup("count"))
 	viper.BindPFlag("wait", monitorCmd.PersistentFlags().Lookup("wait"))
 	viper.BindPFlag("pgurl", monitorCmd.PersistentFlags().Lookup("pgurl"))
+	viper.BindPFlag("format", monitorCmd.PersistentFlags().Lookup("format"))
 	//(&Url, "url", "URL", "Cockroach Cluster API URL")
 
 	// Cobra supports local flags which will only run when this command

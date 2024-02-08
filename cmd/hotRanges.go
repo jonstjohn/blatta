@@ -17,12 +17,14 @@ package cmd
 
 import (
 	"blatta/api"
+	"encoding/csv"
 	"encoding/json"
 	"github.com/spf13/viper"
 	"io/ioutil"
 	"math"
 	"net/url"
 	"sort"
+	"strconv"
 	"text/tabwriter"
 	"time"
 
@@ -142,19 +144,19 @@ func populateAdditionalRangeInfo(allRanges []Range, pgUrl string) error {
 			}
 		}
 
-		maxLength := 30
+		//maxLength := 30
 		var startPrettyStr string
-		if len(startPretty) <= maxLength {
+		//if len(startPretty) <= maxLength {
 			startPrettyStr = startPretty
-		} else {
-			startPrettyStr = fmt.Sprintf("%s...", startPretty[0:maxLength])
-		}
+		//} else {
+		//	startPrettyStr = fmt.Sprintf("%s...", startPretty[0:maxLength])
+		//}
 		var endPrettyStr string
-		if len(endPretty) <= maxLength {
+		//if len(endPretty) <= maxLength {
 			endPrettyStr = endPretty
-		} else {
-			endPrettyStr = fmt.Sprintf("%s...", endPretty[0:maxLength])
-		}
+		//} else {
+		//	endPrettyStr = fmt.Sprintf("%s...", endPretty[0:maxLength])
+		//}
 
 		if len(indexName) > 0 {
 			tableName = fmt.Sprintf("%s@%s", tableName, indexName)
@@ -169,20 +171,35 @@ func populateAdditionalRangeInfo(allRanges []Range, pgUrl string) error {
 	return nil
 }
 
-func printRanges(ranges []Range) {
+func printRanges(ranges []Range, format string) {
 
-	t := time.Now()
-	fmt.Println(t.Format(time.RFC3339))
+	t := time.Now().UTC()
+	tf := t.Format(time.RFC3339)
 
-	w := tabwriter.NewWriter(os.Stdout, 7, 0, 3, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(w,"Node\tRange ID\tQPS\tStore\tDB\tTable / Index\tStart Key\tEnd Key\t")
+	if format == "csv" {
+		w := csv.NewWriter(os.Stdout)
+		w.Write([]string{"time","nodeId","rangeId","qps","storeId","startKey","endKey"})
+		for _, r := range ranges {
+			w.Write([]string{tf, r.NodeId, strconv.Itoa(r.RangeId),
+				fmt.Sprintf("%f", r.QueriesPerSecond), strconv.Itoa(r.StoreId),
+				r.StartPretty, r.EndPretty })
+			w.Flush()
+		}
+	} else {
+		fmt.Println(tf)
 
-	for _, r := range ranges {
-		fmt.Fprintf(w,"%s\t%d\t%.2f\t%d\t%s\t%s\t%s\t%s\t\n", r.NodeId, r.RangeId,
-			r.QueriesPerSecond, r.StoreId, r.Database, r.TableName,
-			r.StartPretty, r.EndPretty)
+		w := tabwriter.NewWriter(os.Stdout, 7, 0, 3, ' ', tabwriter.AlignRight)
+		fmt.Fprintln(w, "Node\tRange ID\tQPS\tStore\tDB\tTable / Index\tStart Key\tEnd Key\t")
+
+		for _, r := range ranges {
+			fmt.Fprintf(w, "%s\t%d\t%.2f\t%d\t%s\t%s\t%s\t%s\t\n", r.NodeId, r.RangeId,
+				r.QueriesPerSecond, r.StoreId, r.Database, r.TableName,
+				r.StartPretty, r.EndPretty)
+		}
+
+		w.Flush()
 	}
-	w.Flush()
+
 }
 
 // hotRangesCmd represents the hotRanges command
@@ -203,6 +220,7 @@ to quickly create a Cobra application.`,
 		//cacert := viper.GetString("cacert")
 		pgUrl := viper.GetString("pgurl")
 		insecure := viper.GetBool("insecure")
+		format := viper.GetString("format")
 
 		// Login with username and password to get API key
 		apiKey, err := api.Login(apiUrl, username, password, insecure)
@@ -228,7 +246,7 @@ to quickly create a Cobra application.`,
 				fmt.Println(err)
 				return err
 			}
-			printRanges(allRanges)
+			printRanges(allRanges, format)
 
 			time.Sleep(time.Duration(Wait) * time.Second)
 
