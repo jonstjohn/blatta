@@ -5,6 +5,7 @@ go 1.16
 require (
 	github.com/cockroachdb/cockroach-go/v2 v2.3.6
 	github.com/gocolly/colly/v2 v2.1.0
+	github.com/jackc/pgx/v4 v4.16.1
 	github.com/spf13/cobra v1.2.1
 	github.com/spf13/viper v1.8.1
 	github.com/stretchr/testify v1.8.4

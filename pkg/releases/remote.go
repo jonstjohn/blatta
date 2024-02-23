@@ -1,5 +1,12 @@
-package settings
+package releases
 
+import "regexp"
+
+/*
+Retrieves and parses remote version information via a Remote Provider
+RemoteProvider: gets release information from Github
+RemoteRelease: release parsed directly from remote yaml
+*/
 import (
 	"bytes"
 	"fmt"
@@ -7,7 +14,6 @@ import (
 	"gopkg.in/yaml.v3"
 	"io"
 	"net/http"
-	"regexp"
 	"sort"
 	"strconv"
 	"time"
@@ -24,13 +30,15 @@ const releaseDataURL = "https://raw.githubusercontent.com/cockroachdb/docs/main/
 var namePattern = regexp.MustCompile(`^v(\d+).(\d+).(\d+)-?(beta|rc|alpha)?\.?(\d+)?$`)
 var majorVersionPattern = regexp.MustCompile(`^v(\d+).(\d+)$`)
 
+type RemoteProvider struct{}
+
 type CustomTime struct {
 	time.Time
 }
 
-// Release contains the information we extract from the YAML file in
+// RemoteRelease contains the information we extract from the YAML file in
 // `releaseDataURL`.
-type Release struct {
+type RemoteRelease struct {
 	Name         string     `yaml:"release_name"`
 	Withdrawn    bool       `yaml:"withdrawn"`
 	CloudOnly    bool       `yaml:"cloud_only"`
@@ -54,6 +62,10 @@ type ReleaseFilter struct {
 	To          time.Time
 }
 
+func NewRemoteProvider() *RemoteProvider {
+	return &RemoteProvider{}
+}
+
 func (ct *CustomTime) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	var s string
 	err := unmarshal(&s)
@@ -74,7 +86,7 @@ func ServerForVersion(v string) (testserver.TestServer, error) {
 		testserver.CustomVersionOpt(v))
 }
 
-func GetReleases() ([]Release, error) {
+func (rp *RemoteProvider) GetReleases() ([]RemoteRelease, error) {
 	resp, err := http.Get(releaseDataURL)
 	if err != nil {
 		return nil, fmt.Errorf("could not download release data: %w", err)
@@ -86,7 +98,7 @@ func GetReleases() ([]Release, error) {
 		return nil, fmt.Errorf("error reading response body: %w", err)
 	}
 
-	var data []Release
+	var data []RemoteRelease
 	if err := yaml.Unmarshal(blob.Bytes(), &data); err != nil { //nolint:yaml
 		return nil, fmt.Errorf("failed to YAML parse release data: %w", err)
 	}
@@ -94,7 +106,7 @@ func GetReleases() ([]Release, error) {
 	return data, nil
 }
 
-func (r *Release) MajorMinorOnly() (int, int, error) {
+func (r *RemoteRelease) MajorMinorOnly() (int, int, error) {
 	matches := majorVersionPattern.FindStringSubmatch((r.MajorVersion))
 	major, err := strconv.Atoi(matches[1])
 	minor, err := strconv.Atoi(matches[2])
@@ -102,7 +114,7 @@ func (r *Release) MajorMinorOnly() (int, int, error) {
 
 }
 
-func (r *Release) Version() Version {
+func (r *RemoteRelease) Version() Version {
 	v := Version{}
 
 	// Attempt to parse the name to get the major, minor, patch, etc
@@ -135,8 +147,8 @@ func (r *Release) Version() Version {
 	return v
 }
 
-func GetReleaseSortedByVersion() ([]Release, error) {
-	releases, err := GetReleases()
+func (rp *RemoteProvider) GetReleaseSortedByVersion() ([]RemoteRelease, error) {
+	releases, err := rp.GetReleases()
 	if err != nil {
 		return nil, err
 	}
@@ -182,12 +194,12 @@ func GetReleaseSortedByVersion() ([]Release, error) {
 // All production releases that are still supported or within 6 months of no longer being supported
 // Most recent major releases of everything else
 /*
-func GetReleasesWeCareAbout() ([]Release, error) {
+func GetReleasesWeCareAbout() ([]RemoteRelease, error) {
 	releases, err := GetReleaseSortedByVersion()
 	if err != nil {
 		return nil, err
 	}
-	filtered := make([]Release, 0)
+	filtered := make([]RemoteRelease, 0)
 
 	now := time.Now()
 	for i, r := range releases {
@@ -208,11 +220,11 @@ func GetReleasesWeCareAbout() ([]Release, error) {
 
 */
 
-func GetReleasesByMajor() (map[string][]Release, []string, error) {
-	bymajors := make(map[string][]Release)
+func (rp *RemoteProvider) GetReleasesByMajor() (map[string][]RemoteRelease, []string, error) {
+	bymajors := make(map[string][]RemoteRelease)
 	majors := make([]string, 0)
 
-	releases, err := GetReleaseSortedByVersion()
+	releases, err := rp.GetReleaseSortedByVersion()
 	if err != nil {
 		return bymajors, majors, err
 	}
@@ -221,7 +233,7 @@ func GetReleasesByMajor() (map[string][]Release, []string, error) {
 		// Initialize releases array, if needed
 		if ok := bymajors[r.MajorVersion]; ok == nil {
 			majors = append(majors, r.MajorVersion)
-			bymajors[r.MajorVersion] = make([]Release, 0)
+			bymajors[r.MajorVersion] = make([]RemoteRelease, 0)
 		}
 		bymajors[r.MajorVersion] = append(bymajors[r.MajorVersion], r)
 	}
@@ -230,12 +242,12 @@ func GetReleasesByMajor() (map[string][]Release, []string, error) {
 }
 
 /*
-func GetLatestReleases(numMajors int) ([]Release, error) {
+func GetLatestReleases(numMajors int) ([]RemoteRelease, error) {
 	releases, err := GetReleases()
 	if err != nil {
 		return nil, err
 	}
-	filtered := make([]Release, 0)
+	filtered := make([]RemoteRelease, 0)
 	lastMajor := 0
 	lastMinor := 0
 	for _, r := range releases {
