@@ -64,3 +64,18 @@ blatta monitor hotRanges --url [Cluster API URL] \
   (--count [count=infinite]) (--insecure)
 ```
 
+## Settings
+
+### Populate
+
+```
+export CLIENT=jon-blatta
+rp create $CLIENT -n 1 --clouds=aws --aws-zones=us-east-1b:1 --aws-machine-type-ssd=m5d.xlarge
+
+GOOS=linux GOARCH=amd64 go build -o bin/blatta
+rp put $CLIENT bin/blatta
+export BLATTA_URL=[serverless instance URL]
+rp ssh $CLIENT "./blatta settings save --version recent-50 --url $BLATTA_URL > blatta.log 2>&1 &"
+rp ssh $CLIENT "tail -f blatta.log"
+
+```

@@ -1,250 +1,122 @@
 package settings
 
 import (
-	"bytes"
+	"blatta/pkg/db"
+	"blatta/pkg/host"
+	"blatta/pkg/releases"
 	"fmt"
 	"github.com/cockroachdb/cockroach-go/v2/testserver"
-	"gopkg.in/yaml.v3"
-	"io"
-	"net/http"
-	"regexp"
-	"sort"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/sirupsen/logrus"
 	"strconv"
-	"time"
+	"strings"
 )
 
-// releaseDataURL is the location of the YAML file maintained by the
-// docs team where release information is encoded. This data is used
-// to render the public CockroachDB releases page. We leverage the
-// data in structured format to generate release information used
-// for testing purposes.
-const releaseDataURL = "https://raw.githubusercontent.com/cockroachdb/docs/main/src/current/_data/releases.yml"
-
-// var namePattern = regexp.MustCompile(`^v(\d+).(\d+).(\d+)-?(beta|rc)?\.?(\d+)$`)
-var namePattern = regexp.MustCompile(`^v(\d+).(\d+).(\d+)-?(beta|rc|alpha)?\.?(\d+)?$`)
-var majorVersionPattern = regexp.MustCompile(`^v(\d+).(\d+)$`)
-
-type CustomTime struct {
-	time.Time
+type Persister struct {
+	SqlExecutor *SqlExecutor
 }
 
-// Release contains the information we extract from the YAML file in
-// `releaseDataURL`.
-type Release struct {
-	Name         string     `yaml:"release_name"`
-	Withdrawn    bool       `yaml:"withdrawn"`
-	CloudOnly    bool       `yaml:"cloud_only"`
-	ReleaseType  string     `yaml:"release_type"` // Production or Testing
-	ReleaseDate  CustomTime `yaml:"release_date"`
-	MajorVersion string     `yaml:"major_version"` // e.g., v1.0, v23.1
+func ClusterSettingsFromRelease(release string) ([]ClusterSetting, error) {
+	t, err := testserver.NewTestServer(
+		testserver.CustomVersionOpt(release))
+	if err != nil {
+		return nil, err
+	}
+	pool, err := db.NewPoolFromUrl(t.PGURL().String())
+	if err != nil {
+		return nil, err
+	}
+	return GetLocalClusterSettings(pool)
 }
 
-type Version struct {
-	Major         int
-	Minor         int
-	Patch         int
-	BetaRc        string
-	BetaRcVersion int
-}
+// SaveClusterSettingsForVersion saves all of the cluster settings for a specific CRDB version, but only
+// if the combination of release, cpu and memory has not been previously run - otherwise it bails early.
+func SaveClusterSettingsForVersion(release string, url string) error {
 
-type ReleaseFilter struct {
-	Widthdrawn  bool
-	ReleaseType string
-	From        time.Time
-	To          time.Time
-}
-
-func (ct *CustomTime) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	var s string
-	err := unmarshal(&s)
+	pool, err := db.NewPoolFromUrl(url)
 	if err != nil {
 		return err
 	}
-	layout := "2006-01-02"
-	t, err := time.Parse(layout, s)
+	p := Persister{SqlExecutor: NewSqlExecutor(pool)}
+
+	// Get host memory and CPU
+	cpu := host.GetCpu()
+	memoryBytes, err := host.GetMemory()
 	if err != nil {
 		return err
 	}
-	ct.Time = t
-	return nil
-}
 
-func ServerForVersion(v string) (testserver.TestServer, error) {
-	return testserver.NewTestServer(
-		testserver.CustomVersionOpt(v))
-}
-
-func GetReleases() ([]Release, error) {
-	resp, err := http.Get(releaseDataURL)
-	if err != nil {
-		return nil, fmt.Errorf("could not download release data: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var blob bytes.Buffer
-	if _, err := io.Copy(&blob, resp.Body); err != nil {
-		return nil, fmt.Errorf("error reading response body: %w", err)
-	}
-
-	var data []Release
-	if err := yaml.Unmarshal(blob.Bytes(), &data); err != nil { //nolint:yaml
-		return nil, fmt.Errorf("failed to YAML parse release data: %w", err)
-	}
-
-	return data, nil
-}
-
-func (r *Release) MajorMinorOnly() (int, int, error) {
-	matches := majorVersionPattern.FindStringSubmatch((r.MajorVersion))
-	major, err := strconv.Atoi(matches[1])
-	minor, err := strconv.Atoi(matches[2])
-	return major, minor, err
-
-}
-
-func (r *Release) Version() Version {
-	v := Version{}
-
-	// Attempt to parse the name to get the major, minor, patch, etc
-	matches := namePattern.FindStringSubmatch(r.Name)
-	if matches != nil {
-		major, err := strconv.Atoi(matches[1])
-		minor, err := strconv.Atoi(matches[2])
-		patch, err := strconv.Atoi(matches[3])
+	rs := make([]string, 0)
+	if strings.HasPrefix(release, "recent-") {
+		rp := releases.NewPersister(pool)
+		cntStr := strings.Replace(release, "recent-", "", 1)
+		cnt, err := strconv.Atoi(cntStr)
 		if err != nil {
-			return v
+			return err
 		}
-		v.Major = major
-		v.Minor = minor
-		v.Patch = patch
-		v.BetaRc = matches[4]
-		if len(matches[5]) > 0 {
-			betaRcVersion, err := strconv.Atoi(matches[5])
-			if err != nil {
-				return v
-			}
-			v.BetaRcVersion = betaRcVersion
+		rs, err = rp.SqlExecutor.GetRecentReleaseNames(cnt)
+		if err != nil {
+			return err
 		}
-	} else { // if we can't parse the versions, use the major minor from major_version
-		major, minor, _ := r.MajorMinorOnly()
-		v.Major = major
-		v.Minor = minor
-		v.BetaRc = "beta" // TODO just call it beta for now
+	} else {
+		rs = append(rs, release)
 	}
 
-	return v
-}
+	// Iterate over releases
+	for _, r := range rs {
 
-func GetReleaseSortedByVersion() ([]Release, error) {
-	releases, err := GetReleases()
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(releases, func(i int, j int) bool {
-		iv := releases[i].Version()
-		jv := releases[j].Version()
-		if iv.Major < jv.Major {
-			return true
-		} else if iv.Major == jv.Major {
-			if iv.Minor < jv.Minor {
-				return true
-			} else if iv.Minor == jv.Minor {
-				if iv.Patch < jv.Patch {
-					return true
-				} else if iv.Patch == jv.Patch {
-					if iv.BetaRc == "alpha" && (jv.BetaRc == "beta" || jv.BetaRc == "rc" || jv.BetaRc == "") {
-						return true
-					} else if iv.BetaRc == "beta" && (jv.BetaRc == "rc" || jv.BetaRc == "") {
-						return true
-					} else if iv.BetaRc == "rc" && jv.BetaRc == "" {
-						return true
-					} else if iv.BetaRc == jv.BetaRc {
-						return iv.BetaRcVersion < jv.BetaRcVersion
-					} else {
-						return false
-					}
-				} else {
-					return false
-				}
-			} else {
-				return false
-			}
-		} else {
-			return false
+		// Check to see if save run already exists, if it does, bail early - we've already captured the settings
+		exists, err := p.SqlExecutor.SaveRunExists(r, cpu, memoryBytes)
+		if err != nil {
+			return err
 		}
-		return true
-	})
-	return releases, nil
-}
-
-// Releases that we care about
-// Latest major non-production release, if latest major is not in production
-// All production releases that are still supported or within 6 months of no longer being supported
-// Most recent major releases of everything else
-/*
-func GetReleasesWeCareAbout() ([]Release, error) {
-	releases, err := GetReleaseSortedByVersion()
-	if err != nil {
-		return nil, err
-	}
-	filtered := make([]Release, 0)
-
-	now := time.Now()
-	for i, r := range releases {
-
-		// Latest release and it isn't production, always include it
-		if i == len(releases)-1 && r.ReleaseType != "production" {
-			releases = append(releases, r)
+		if exists {
+			logrus.Info(fmt.Sprintf("Save run already exists for '%s' with cpu/memory %d/%d", r, cpu, memoryBytes))
 			continue
 		}
 
-		// Is supported with some additional grace period
-		if r.isSupportedWithGrace() {
-
+		// Get the cluster settings for this release
+		settings, err := ClusterSettingsFromRelease(r)
+		if err != nil {
+			return err
 		}
-		if r.ReleaseDate.Time
-	}
-}
+		rawSettings := make([]RawSetting, len(settings))
 
-*/
-
-func GetReleasesByMajor() (map[string][]Release, []string, error) {
-	bymajors := make(map[string][]Release)
-	majors := make([]string, 0)
-
-	releases, err := GetReleaseSortedByVersion()
-	if err != nil {
-		return bymajors, majors, err
-	}
-
-	for _, r := range releases {
-		// Initialize releases array, if needed
-		if ok := bymajors[r.MajorVersion]; ok == nil {
-			majors = append(majors, r.MajorVersion)
-			bymajors[r.MajorVersion] = make([]Release, 0)
+		// Convert the cluster settings into raw settings to be saved
+		for i, s := range settings {
+			rawSettings[i] = *NewRawSetting(r, cpu, memoryBytes, s)
 		}
-		bymajors[r.MajorVersion] = append(bymajors[r.MajorVersion], r)
+
+		err = p.SaveRawSettings(rawSettings)
+		if err != nil {
+			return err
+		}
+
+		// Save the save run so we don't have to re-run later
+		err = p.SqlExecutor.UpsertSaveRun(r, cpu, memoryBytes)
+		if err != nil {
+			return err
+		}
 	}
 
-	return bymajors, majors, nil
+	return nil
+
 }
 
-/*
-func GetLatestReleases(numMajors int) ([]Release, error) {
-	releases, err := GetReleases()
-	if err != nil {
-		return nil, err
+func NewPersister(pool *pgxpool.Pool) *Persister {
+	return &Persister{SqlExecutor: NewSqlExecutor(pool)}
+}
+
+func (p *Persister) Init() error {
+	return p.SqlExecutor.CreateRawTable()
+}
+
+func (p *Persister) SaveRawSettings(settings []RawSetting) error {
+	for _, s := range settings {
+		err := p.SqlExecutor.UpsertRawSetting(s)
+		if err != nil {
+			return err
+		}
 	}
-	filtered := make([]Release, 0)
-	lastMajor := 0
-	lastMinor := 0
-	for _, r := range releases {
-		major, minor := majorMinorFromReleaseName(r.Name)
-		filtered = append(filtered, r)
-	}
+	return nil
 }
-
-func majorMinorFromReleaseName(n string) (int, int) {
-
-}
-*/

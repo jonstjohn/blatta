@@ -3,6 +3,7 @@ package releases
 import (
 	"github.com/stretchr/testify/assert"
 	"testing"
+	"time"
 )
 
 func TestServerForVersion(t *testing.T) {
@@ -107,4 +108,41 @@ func TestGet3MostRecentMajorReleases(t *testing.T) {
 	}
 	assert.NotEmpty(t, results)
 
+}
+
+func TestReleasesSortBy(t *testing.T) {
+	rs := Releases{
+		Release{
+			Name:          "",
+			Withdrawn:     false,
+			CloudOnly:     false,
+			ReleaseType:   "",
+			ReleaseDate:   time.Now(),
+			MajorVersion:  "",
+			Major:         23,
+			Minor:         1,
+			Patch:         0,
+			BetaRc:        "",
+			BetaRcVersion: 0,
+		},
+		Release{
+			Name:          "",
+			Withdrawn:     false,
+			CloudOnly:     false,
+			ReleaseType:   "",
+			ReleaseDate:   time.Now().Add(5 * time.Minute),
+			MajorVersion:  "",
+			Major:         23,
+			Minor:         1,
+			Patch:         0,
+			BetaRc:        "rc",
+			BetaRcVersion: 0,
+		},
+	}
+
+	rs.SortBy(SortByVersion)
+	assert.Equal(t, "rc", rs[0].BetaRc)
+
+	rs.SortBy(SortByReleaseDate)
+	assert.Equal(t, "", rs[0].BetaRc)
 }
