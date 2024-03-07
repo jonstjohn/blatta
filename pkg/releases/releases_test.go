@@ -15,8 +15,8 @@ func TestServerForVersion(t *testing.T) {
 }
 
 func TestGetReleases(t *testing.T) {
-	rp := NewRemoteProvider()
-	rs, err := rp.GetReleases()
+	rp := NewRemoteDataSource()
+	rs, err := rp.GetRemoteReleases()
 	assert.Nil(t, err)
 	for _, r := range rs {
 		assert.NotNil(t, r.ReleaseDate)
@@ -67,7 +67,7 @@ func TestReleaseVersion(t *testing.T) {
 }
 
 func TestGetReleasesSortedByVersion(t *testing.T) {
-	rp := NewRemoteProvider()
+	rp := NewRemoteDataSource()
 	releases, err := rp.GetReleaseSortedByVersion()
 	assert.Nil(t, err)
 	m := make(map[int]map[int]map[int]RemoteRelease)
@@ -85,7 +85,7 @@ func TestGetReleasesSortedByVersion(t *testing.T) {
 }
 
 func TestGetReleasesByMajor(t *testing.T) {
-	rp := NewRemoteProvider()
+	rp := NewRemoteDataSource()
 	releases, majors, err := rp.GetReleasesByMajor()
 	assert.Nil(t, err)
 	assert.NotNil(t, releases)
@@ -93,7 +93,7 @@ func TestGetReleasesByMajor(t *testing.T) {
 }
 
 func TestGet3MostRecentMajorReleases(t *testing.T) {
-	rp := NewRemoteProvider()
+	rp := NewRemoteDataSource()
 	releases, majors, err := rp.GetReleasesByMajor()
 	assert.Nil(t, err)
 	results := make([]RemoteRelease, 0)

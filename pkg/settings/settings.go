@@ -1,20 +1,15 @@
 package settings
 
 import (
-	"blatta/pkg/db"
+	"blatta/pkg/dbpgx"
 	"blatta/pkg/host"
-	"blatta/pkg/releases"
+	releasesdatasource "blatta/pkg/releases"
 	"fmt"
 	"github.com/cockroachdb/cockroach-go/v2/testserver"
-	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/sirupsen/logrus"
 	"strconv"
 	"strings"
 )
-
-type Persister struct {
-	SqlExecutor *SqlExecutor
-}
 
 func ClusterSettingsFromRelease(release string) ([]ClusterSetting, error) {
 	t, err := testserver.NewTestServer(
@@ -22,22 +17,22 @@ func ClusterSettingsFromRelease(release string) ([]ClusterSetting, error) {
 	if err != nil {
 		return nil, err
 	}
-	pool, err := db.NewPoolFromUrl(t.PGURL().String())
+	pool, err := dbpgx.NewPoolFromUrl(t.PGURL().String())
 	if err != nil {
 		return nil, err
 	}
 	return GetLocalClusterSettings(pool)
 }
 
-// SaveClusterSettingsForVersion saves all of the cluster settings for a specific CRDB version, but only
+// SaveClusterSettingsForVersion saves all the cluster settings for a specific CRDB version, but only
 // if the combination of release, cpu and memory has not been previously run - otherwise it bails early.
 func SaveClusterSettingsForVersion(release string, url string) error {
 
-	pool, err := db.NewPoolFromUrl(url)
+	pool, err := dbpgx.NewPoolFromUrl(url)
 	if err != nil {
 		return err
 	}
-	p := Persister{SqlExecutor: NewSqlExecutor(pool)}
+	ds := NewDbDatasource(pool)
 
 	// Get host memory and CPU
 	cpu := host.GetCpu()
@@ -48,13 +43,13 @@ func SaveClusterSettingsForVersion(release string, url string) error {
 
 	rs := make([]string, 0)
 	if strings.HasPrefix(release, "recent-") {
-		rp := releases.NewPersister(pool)
+		rdb := releasesdatasource.NewDbDatasource(pool)
 		cntStr := strings.Replace(release, "recent-", "", 1)
 		cnt, err := strconv.Atoi(cntStr)
 		if err != nil {
 			return err
 		}
-		rs, err = rp.SqlExecutor.GetRecentReleaseNames(cnt)
+		rs, err = rdb.GetRecentReleaseNames(cnt)
 		if err != nil {
 			return err
 		}
@@ -66,7 +61,7 @@ func SaveClusterSettingsForVersion(release string, url string) error {
 	for _, r := range rs {
 
 		// Check to see if save run already exists, if it does, bail early - we've already captured the settings
-		exists, err := p.SqlExecutor.SaveRunExists(r, cpu, memoryBytes)
+		exists, err := ds.SaveRunExists(r, cpu, memoryBytes)
 		if err != nil {
 			return err
 		}
@@ -87,13 +82,13 @@ func SaveClusterSettingsForVersion(release string, url string) error {
 			rawSettings[i] = *NewRawSetting(r, cpu, memoryBytes, s)
 		}
 
-		err = p.SaveRawSettings(rawSettings)
+		err = ds.SaveRawSettings(rawSettings)
 		if err != nil {
 			return err
 		}
 
 		// Save the save run so we don't have to re-run later
-		err = p.SqlExecutor.UpsertSaveRun(r, cpu, memoryBytes)
+		err = ds.SaveRun(r, cpu, memoryBytes)
 		if err != nil {
 			return err
 		}
@@ -103,20 +98,31 @@ func SaveClusterSettingsForVersion(release string, url string) error {
 
 }
 
-func NewPersister(pool *pgxpool.Pool) *Persister {
-	return &Persister{SqlExecutor: NewSqlExecutor(pool)}
-}
-
-func (p *Persister) Init() error {
-	return p.SqlExecutor.CreateRawTable()
-}
-
-func (p *Persister) SaveRawSettings(settings []RawSetting) error {
-	for _, s := range settings {
-		err := p.SqlExecutor.UpsertRawSetting(s)
-		if err != nil {
-			return err
-		}
+// SummarizeSettings gets the raw settings and summarizes them into the settings_summary table
+func SummarizeAndSaveSettings(url string) error {
+	pool, err := dbpgx.NewPoolFromUrl(url)
+	if err != nil {
+		return err
 	}
-	return nil
+
+	rsDs := NewDbDatasource(pool)
+	rawSettings, err := rsDs.GetRawSettings()
+	if err != nil {
+		return err
+	}
+
+	relDs := releasesdatasource.NewDbDatasource(pool)
+	rels, err := relDs.GetReleases()
+	if err != nil {
+		return err
+	}
+
+	s := NewSummarizer(rawSettings, rels)
+
+	summaries, err := s.Summarize()
+	if err != nil {
+		return err
+	}
+
+	return rsDs.SaveSettingsSummaries(summaries)
 }

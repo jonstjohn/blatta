@@ -1,15 +1,32 @@
 package settings
 
-/*
 import (
 	"context"
 	"encoding/json"
 	"github.com/jackc/pgx/v4/pgxpool"
 )
 
-type SqlExecutor struct {
+type Db struct {
 	Pool *pgxpool.Pool
 }
+
+/*
+type SettingsSummaryRow struct {
+	Variable           string
+	Value              string
+	Type               string
+	Public             bool
+	Description        string
+	DefaultValue       string
+	Origin             string
+	Key                string
+	FirstReleases      []string
+	LastReleases       []string
+	ValueChanges       []settings.Change
+	DescriptionChanges []settings.Change
+}
+
+*/
 
 const CreateRawTable = `
 CREATE TABLE settings_raw (
@@ -99,7 +116,7 @@ CREATE TABLE settings_summary (
 
 const UpsertSummarySql = `
 UPSERT INTO settings_summary (
-	variable, value, type,
+	variable, value, type, 
 	public, description, default_value,
     origin, key, first_releases,
 	last_releases, value_changes, description_changes)
@@ -110,61 +127,35 @@ VALUES (
 	$10, $11, $12)
 `
 
+const SelectSummarySql = `
+SELECT variable, value, type, 
+	public, description, default_value,
+    origin, key, first_releases,
+	last_releases, value_changes, description_changes
+FROM settings_summary
+ORDER BY variable
+`
+
 const CountSaveRun = `
 SELECT count(*)
 FROM save_runs
 WHERE release_name = $1 AND cpu = $2 AND memory_bytes = $3
 `
 
-func NewSqlExecutor(pool *pgxpool.Pool) *SqlExecutor {
-	return &SqlExecutor{
+func NewDbDatasource(pool *pgxpool.Pool) *Db {
+	return &Db{
 		Pool: pool,
 	}
 }
 
-func (s *SqlExecutor) CreateRawTable() error {
-	_, err := s.Pool.Exec(context.Background(), CreateRawTable)
-	return err
-}
+func (db *Db) GetRawSettings() (RawSettings, error) {
 
-func (s *SqlExecutor) UpsertRawSetting(r RawSetting) error {
-	_, err := s.Pool.Exec(context.Background(), UpsertRaw,
-		r.ReleaseName, r.Cpu, r.MemoryBytes,
-		r.Variable, r.Value, r.Type,
-		r.Public, r.Description, r.DefaultValue,
-		r.Origin, r.Key,
-	)
-	return err
-}
-
-func (s *SqlExecutor) CreateSaveRunTable() error {
-	_, err := s.Pool.Exec(context.Background(), CreateSaveRunTable)
-	return err
-}
-
-func (s *SqlExecutor) SaveRunExists(releaseName string, cpu int, memoryBytes int64) (bool, error) {
-	var cnt int
-	err := s.Pool.QueryRow(context.Background(), CountSaveRun, releaseName, cpu, memoryBytes).Scan(&cnt)
-	if err != nil {
-		return false, err
-	}
-	return cnt > 0, nil
-}
-
-func (s *SqlExecutor) UpsertSaveRun(release string, cpu int, memory int64) error {
-	_, err := s.Pool.Exec(context.Background(), UpsertSaveRun,
-		release, cpu, memory)
-	return err
-}
-
-func (s *SqlExecutor) GetSettingsRawOrderedByVersion() ([]RawSetting, error) {
-
-	rows, err := s.Pool.Query(context.Background(), OrderedRawSettingsSql)
+	rows, err := db.Pool.Query(context.Background(), OrderedRawSettingsSql)
 	if err != nil {
 		return nil, err
 	}
 
-	settings := make([]RawSetting, 0)
+	sets := make([]RawSetting, 0)
 
 	for rows.Next() {
 		var releaseName string
@@ -183,7 +174,7 @@ func (s *SqlExecutor) GetSettingsRawOrderedByVersion() ([]RawSetting, error) {
 		if err != nil {
 			return nil, err
 		}
-		settings = append(settings, RawSetting{
+		sets = append(sets, RawSetting{
 			ReleaseName:  releaseName,
 			Cpu:          cpu,
 			MemoryBytes:  memoryBytes,
@@ -198,17 +189,121 @@ func (s *SqlExecutor) GetSettingsRawOrderedByVersion() ([]RawSetting, error) {
 		})
 	}
 
-	return settings, nil
+	return sets, nil
 }
 
-func (s *SqlExecutor) UpsertSummary(summary Summary) error {
+/*
+func (db *Db) GetSettingSummaries() (settings.Summaries, error) {
+	rows, err := db.Pool.Query(context.Background(), SelectSummarySql)
+	if err != nil {
+		return nil, err
+	}
+
+	summaries := make([]settings.Summary, 0)
+
+	for rows.Next() {
+		var variable string
+		var value string
+		var typ string
+		var public bool
+		var description string
+		var defaultValue string
+		var origin string
+		var key string
+		var firstReleases []string
+		var lastReleases []string
+		var valueChanges []settings.Change
+		var descriptionChanges []settings.Change
+
+		err := rows.Scan(&variable, &value, &typ, &public,
+			&description, &defaultValue, &origin, &key,
+			&firstReleases, &lastReleases,
+			&value, &descriptionChanges)
+		if err != nil {
+			return nil, err
+		}
+		sets = append(sets, settings.RawSetting{
+			ReleaseName:  releaseName,
+			Cpu:          cpu,
+			MemoryBytes:  memoryBytes,
+			Variable:     variable,
+			Value:        value,
+			Type:         typ,
+			Public:       public,
+			Description:  description,
+			DefaultValue: defaultValue,
+			Origin:       origin,
+			Key:          key,
+		})
+	}
+	return nil
+}
+
+*/
+
+func (db *Db) SaveRawSettings(rs RawSettings) error {
+	for _, r := range rs {
+		err := db.upsertRawSetting(r)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *Db) SaveSettingsSummaries(ss Summaries) error {
+	for _, s := range ss {
+		err := db.upsertSummary(s)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *Db) createRawTable() error {
+	_, err := db.Pool.Exec(context.Background(), CreateRawTable)
+	return err
+}
+
+func (db *Db) upsertRawSetting(r RawSetting) error {
+	_, err := db.Pool.Exec(context.Background(), UpsertRaw,
+		r.ReleaseName, r.Cpu, r.MemoryBytes,
+		r.Variable, r.Value, r.Type,
+		r.Public, r.Description, r.DefaultValue,
+		r.Origin, r.Key,
+	)
+	return err
+}
+
+func (db *Db) createSaveRunTable() error {
+	_, err := db.Pool.Exec(context.Background(), CreateSaveRunTable)
+	return err
+}
+
+func (db *Db) SaveRunExists(releaseName string, cpu int, memoryBytes int64) (bool, error) {
+	var cnt int
+	err := db.Pool.QueryRow(context.Background(), CountSaveRun, releaseName, cpu, memoryBytes).Scan(&cnt)
+	if err != nil {
+		return false, err
+	}
+	return cnt > 0, nil
+}
+
+func (db *Db) SaveRun(release string, cpu int, memory int64) error {
+	_, err := db.Pool.Exec(context.Background(), UpsertSaveRun,
+		release, cpu, memory)
+	return err
+}
+
+func (db *Db) upsertSummary(summary Summary) error {
 
 	valueChangesB, err := json.Marshal(summary.ValueChanges)
 	descriptionChangesB, err := json.Marshal(summary.DescriptionChanges)
 	if err != nil {
 		return err
 	}
-	_, err = s.Pool.Exec(context.Background(), UpsertSummarySql,
+	_, err = db.Pool.Exec(context.Background(), UpsertSummarySql,
 		summary.Variable, summary.Value, summary.Type,
 		summary.Public, summary.Description, summary.DefaultValue,
 		summary.Origin, summary.Key, summary.FirstReleases,

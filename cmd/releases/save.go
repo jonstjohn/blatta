@@ -1,9 +1,8 @@
 package releases
 
 import (
-	"blatta/pkg/db"
+	"blatta/pkg/dbpgx"
 	"blatta/pkg/releases"
-	"fmt"
 	"github.com/spf13/cobra"
 )
 
@@ -13,16 +12,13 @@ var saveCmd = &cobra.Command{
 	Use:   "save",
 	Short: "Releases save command",
 	Run: func(cmd *cobra.Command, args []string) {
-		pool, err := db.NewPoolFromUrl(SaveUrlFlag)
+		pool, err := dbpgx.NewPoolFromUrl(SaveUrlFlag)
 		if err != nil {
 			panic(err)
 		}
-		errors := releases.UpdateReleases(pool)
-		if len(errors) > 0 {
-			for _, err := range errors {
-				fmt.Println(err)
-			}
-			panic(errors)
+		err = releases.UpdateReleases(pool)
+		if err != nil {
+			panic(err)
 		}
 	},
 }

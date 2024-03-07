@@ -11,7 +11,7 @@ var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Releases list command",
 	Run: func(cmd *cobra.Command, args []string) {
-		rp := releases.NewProvider()
+		rp := releases.NewRemoteDataSource()
 		releases, err := rp.GetReleases()
 		if err != nil {
 			panic(err)

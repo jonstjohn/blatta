@@ -6,6 +6,84 @@ import (
 	"time"
 )
 
+type Db struct {
+	Pool *pgxpool.Pool
+}
+
+func NewDbDatasource(pool *pgxpool.Pool) *Db {
+	return &Db{Pool: pool}
+}
+
+// GetReleases gets releases from the database pool connection
+func (db *Db) GetReleases() (Releases, error) {
+	rows, err := db.getReleasesRows()
+	if err != nil {
+		return nil, err
+	}
+
+	rels := make([]Release, len(rows))
+	for i, r := range rows {
+		rels[i] = Release{
+			Name:          r.Name,
+			Withdrawn:     r.Withdrawn,
+			CloudOnly:     r.CloudOnly,
+			ReleaseType:   r.ReleaseType,
+			ReleaseDate:   r.ReleaseDate,
+			MajorVersion:  r.MajorVersion,
+			Major:         r.Major,
+			Minor:         r.Minor,
+			Patch:         r.Patch,
+			BetaRc:        r.BetaRc,
+			BetaRcVersion: r.BetaRcVersion,
+		}
+	}
+	return rels, nil
+}
+
+func (db *Db) SaveReleases(rels Releases) error {
+	for _, r := range rels {
+
+		_, err := db.Pool.Exec(context.Background(), UPSERT,
+			r.Name, r.Withdrawn, r.CloudOnly,
+			r.ReleaseType, r.ReleaseDate, r.MajorVersion,
+			r.Major, r.Minor, r.Patch,
+			r.BetaRc, r.BetaRcVersion,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *Db) getReleasesRows() ([]ReleasesRow, error) {
+	rows, err := db.Pool.Query(context.Background(), SelectAllReleasesSql)
+	if err != nil {
+		return nil, err
+	}
+	rrs := make([]ReleasesRow, 0)
+	for rows.Next() {
+		var name string
+		var withdrawn bool
+		var cloudOnly bool
+		var releaseType string
+		var releaseDate time.Time
+		var majorVersion string
+		var major int
+		var minor int
+		var patch int
+		var betaRc string
+		var betaRcVersion int
+		rows.Scan(&name, &withdrawn, &cloudOnly, &releaseType, &releaseDate, &majorVersion, &major,
+			&minor, &patch, &betaRc, &betaRcVersion)
+		rrs = append(rrs, ReleasesRow{Name: name, Withdrawn: withdrawn, CloudOnly: cloudOnly,
+			ReleaseType: releaseType, ReleaseDate: releaseDate, MajorVersion: majorVersion,
+			Major: major, Minor: minor, Patch: patch, BetaRc: betaRc, BetaRcVersion: betaRcVersion,
+		})
+	}
+	return rrs, nil
+}
+
 type ReleasesRow struct {
 	Name          string
 	Withdrawn     bool
@@ -83,19 +161,13 @@ ORDER BY major DESC, minor DESC, patch DESC
 LIMIT 1
 `
 
-func NewSqlExecutor(pool *pgxpool.Pool) *SqlExecutor {
-	return &SqlExecutor{
-		Pool: pool,
-	}
-}
-
-func (s *SqlExecutor) CreateTable() error {
-	_, err := s.Pool.Exec(context.Background(), CREATE_TABLE)
+func (db *Db) CreateTable() error {
+	_, err := db.Pool.Exec(context.Background(), CREATE_TABLE)
 	return err
 }
 
-func (s *SqlExecutor) UpsertRelease(r Release) error {
-	_, err := s.Pool.Exec(context.Background(), UPSERT,
+func (db *Db) UpsertRelease(r Release) error {
+	_, err := db.Pool.Exec(context.Background(), UPSERT,
 		r.Name, r.Withdrawn, r.CloudOnly,
 		r.ReleaseType, r.ReleaseDate, r.MajorVersion,
 		r.Major, r.Minor, r.Patch,
@@ -104,8 +176,8 @@ func (s *SqlExecutor) UpsertRelease(r Release) error {
 	return err
 }
 
-func (s *SqlExecutor) GetRecentReleaseNames(cnt int) ([]string, error) {
-	rows, err := s.Pool.Query(context.Background(),
+func (db *Db) GetRecentReleaseNames(cnt int) ([]string, error) {
+	rows, err := db.Pool.Query(context.Background(),
 		"SELECT name FROM releases WHERE withdrawn = false AND cloud_only = false ORDER BY release_date DESC LIMIT $1 ", cnt)
 
 	if err != nil {
@@ -122,8 +194,8 @@ func (s *SqlExecutor) GetRecentReleaseNames(cnt int) ([]string, error) {
 	return names, nil
 }
 
-func (s *SqlExecutor) GetAllReleasesRows() ([]ReleasesRow, error) {
-	rows, err := s.Pool.Query(context.Background(), SelectAllReleasesSql)
+func (db *Db) GetAllReleasesRows() ([]ReleasesRow, error) {
+	rows, err := db.Pool.Query(context.Background(), SelectAllReleasesSql)
 	if err != nil {
 		return nil, err
 	}

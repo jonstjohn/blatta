@@ -9,18 +9,14 @@ import (
 // The releases package provides functionality around CockroachDB releases, including listing and saving to
 // a remote cluster
 
-type Provider struct{}
-type Persister struct {
-	SqlExecutor *SqlExecutor
-}
-
 type Releases []Release
 
 type SortBy int
 
 const (
-	SortByVersion     SortBy = iota
-	SortByReleaseDate SortBy = iota
+	SortByVersion         SortBy = iota
+	SortByReleaseDate     SortBy = iota
+	SortByVersionReversed SortBy = iota
 )
 
 type Release struct {
@@ -35,24 +31,6 @@ type Release struct {
 	Patch         int       `json:"path"`
 	BetaRc        string    `json:"beta_rc"`
 	BetaRcVersion int       `json:"beta_rc_version"`
-}
-
-// NewReleaseFromRemote
-func NewReleaseFromRemote(remote RemoteRelease) *Release {
-	v := remote.Version()
-	return &Release{
-		Name:          remote.Name,
-		Withdrawn:     remote.Withdrawn,
-		CloudOnly:     remote.CloudOnly,
-		ReleaseType:   remote.ReleaseType,
-		ReleaseDate:   remote.ReleaseDate.Time,
-		MajorVersion:  remote.MajorVersion,
-		Major:         v.Major,
-		Minor:         v.Minor,
-		Patch:         v.Patch,
-		BetaRc:        v.BetaRc,
-		BetaRcVersion: v.BetaRcVersion,
-	}
 }
 
 func (r *Release) CompareDates(r2 *Release) int {
@@ -104,74 +82,15 @@ func (r *Release) CompareVersion(r2 *Release) int {
 	return 1
 }
 
-func UpdateReleases(pool *pgxpool.Pool) []error {
-	p := NewProvider()
-	errors := make([]error, 0)
-	releases, err := p.GetReleases()
+func UpdateReleases(pool *pgxpool.Pool) error {
+
+	remote := NewRemoteDataSource()
+	db := NewDbDatasource(pool)
+	releasesFromRemote, err := remote.GetReleases()
 	if err != nil {
-		errors = append(errors, err)
-		return errors
+		return err
 	}
-	persister := NewPersister(pool)
-	err = persister.Init()
-	if err != nil {
-		errors = append(errors, err)
-		return errors
-	}
-	return persister.SaveReleases(releases)
-}
-
-func NewProvider() *Provider {
-	return &Provider{}
-}
-
-func (p *Provider) GetReleases() ([]Release, error) {
-	rp := NewRemoteProvider()
-	rrs, err := rp.GetReleases()
-	if err != nil {
-		return nil, err
-	}
-	releases := make([]Release, len(rrs))
-	for i, rr := range rrs {
-		releases[i] = *NewReleaseFromRemote(rr)
-	}
-	return releases, nil
-}
-
-func NewPersister(pool *pgxpool.Pool) *Persister {
-	return &Persister{SqlExecutor: NewSqlExecutor(pool)}
-}
-
-func (p *Persister) Init() error {
-	return p.SqlExecutor.CreateTable()
-}
-
-func (p *Persister) SaveReleases(releases []Release) []error {
-	errors := make([]error, 0)
-	for _, r := range releases {
-		err := p.SqlExecutor.UpsertRelease(r)
-		if err != nil {
-			errors = append(errors, err)
-		}
-	}
-	return errors
-}
-
-// GetRelevantReleases gets the following:
-//   - Production releases from the past 2 years that have not been withdrawn
-//   - If the most recent major release has no production releases, then it gets all testing releases
-//   - Gets most release for all major releases older than 2 years
-func (p *Provider) GetRelevantReleases() ([]Release, error) {
-	rp := NewRemoteProvider()
-	rrs, err := rp.GetReleases()
-	if err != nil {
-		return nil, err
-	}
-	releases := make([]Release, len(rrs))
-	for i, rr := range rrs {
-		releases[i] = *NewReleaseFromRemote(rr)
-	}
-	return releases, nil
+	return db.SaveReleases(releasesFromRemote)
 }
 
 func (rs *Releases) SortBy(sort SortBy) {
@@ -180,9 +99,112 @@ func (rs *Releases) SortBy(sort SortBy) {
 		slices.SortFunc(*rs, func(a, b Release) int {
 			return a.CompareVersion(&b)
 		})
+	case SortByVersionReversed:
+		slices.SortFunc(*rs, func(a, b Release) int {
+			return 0 - a.CompareVersion(&b)
+		})
 	case SortByReleaseDate:
 		slices.SortFunc(*rs, func(a, b Release) int {
 			return a.CompareDates(&b)
 		})
 	}
+}
+
+// MajorVersions returns the major versions for all of the releases sorted by version
+func (rs *Releases) MajorVersions() []string {
+	rs.SortBy(SortByVersion)
+	mvs := make([]string, 0)
+	for _, r := range *rs {
+		if !slices.Contains(mvs, r.MajorVersion) {
+			mvs = append(mvs, r.MajorVersion)
+		}
+	}
+	return mvs
+}
+
+func (rs *Releases) FirstTestingReleaseForMajorVersion(mv string) *Release {
+	for _, r := range *rs {
+		if r.MajorVersion == mv && r.ReleaseType == "Testing" {
+			return &r
+		}
+	}
+	return nil
+}
+
+func (rs *Releases) FirstProductionReleaseForMajorVersion(mv string) *Release {
+	for _, r := range *rs {
+		if r.MajorVersion == mv && r.ReleaseType == "Production" {
+			return &r
+		}
+	}
+	return nil
+}
+
+func (rs *Releases) LatestReleaseForMajorVersion(mv string) *Release {
+	lastR := Release{}
+	for _, r := range *rs {
+		if lastR.MajorVersion == mv && r.MajorVersion != mv {
+			return &r
+		}
+		lastR = r
+	}
+	if lastR.MajorVersion == mv {
+		return &lastR
+	}
+	return nil
+}
+
+func (rs *Releases) GetReleaseForName(name string) *Release {
+	for _, r := range *rs {
+		if r.Name == name {
+			return &r
+		}
+	}
+
+	return nil
+}
+
+func (rs *Releases) FilterForNames(names []string) (ret Releases) {
+	for _, r := range *rs {
+		if slices.Contains(names, r.Name) {
+			ret = append(ret, r)
+		}
+	}
+	return
+}
+
+func (rs *Releases) MostRecent() Release {
+	rs.SortBy(SortByVersion)
+	return (*rs)[len(*rs)-1]
+}
+
+// FirstReleasePerMajorVersion returns a list of releases that were the first for the set of releases
+func (rs *Releases) FirstReleasePerMajorVersion() []Release {
+	rs.SortBy(SortByVersion)
+	rsmv := make([]Release, 0)
+	m := make(map[string]bool)
+	for _, r := range *rs {
+		if _, ok := m[r.MajorVersion]; !ok {
+			m[r.MajorVersion] = true
+			rsmv = append(rsmv, r)
+		}
+	}
+
+	return rsmv
+}
+
+// LastReleasePerMajorVersion returns a list of releases that were the last for the set of releases
+func (rs *Releases) LastReleasePerMajorVersion() Releases {
+	rs.SortBy(SortByVersionReversed)
+	rsmv := make(Releases, 0)
+	m := make(map[string]bool)
+	for _, r := range *rs {
+		if _, ok := m[r.MajorVersion]; !ok {
+			m[r.MajorVersion] = true
+			rsmv = append(rsmv, r)
+		}
+	}
+
+	rsmv.SortBy(SortByVersion)
+	return rsmv
 }

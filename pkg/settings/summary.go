@@ -1,5 +1,7 @@
 package settings
 
+import "blatta/pkg/releases"
+
 // Summary - create a summary of all the raw settings. Here is what we're interested in:
 // - variable name
 // - default values over releases
@@ -21,7 +23,8 @@ limit 100;
 */
 
 type Summarizer struct {
-	SqlExecutor SqlExecutor
+	RawSettings RawSettings
+	Releases    releases.Releases
 }
 
 type Change struct {
@@ -29,6 +32,8 @@ type Change struct {
 	From    string
 	To      string
 }
+
+type Summaries []Summary
 
 type Summary struct {
 	Variable           string
@@ -46,55 +51,35 @@ type Summary struct {
 	DescriptionChanges []Change
 }
 
-func NewSummarizer(sqlExecutor SqlExecutor) *Summarizer {
-	return &Summarizer{SqlExecutor: sqlExecutor}
+func NewSummarizer(rawSettings RawSettings, rels releases.Releases) *Summarizer {
+	return &Summarizer{RawSettings: rawSettings, Releases: rels}
 }
 
-func NewSummaryFromRaw(rs RawSetting) *Summary {
-	return &Summary{
-		Variable:           rs.Variable,
-		Value:              rs.Value,
-		Type:               rs.Type,
-		Public:             rs.Public,
-		Description:        rs.Description,
-		DefaultValue:       rs.DefaultValue,
-		Origin:             rs.Origin,
-		Key:                rs.Key,
-		FirstReleases:      []string{rs.ReleaseName},
-		LastReleases:       make([]string, 0),
-		ValueChanges:       make([]Change, 0),
-		DescriptionChanges: make([]Change, 0),
-	}
-}
+// SummarizeAndSave takes raw settings and releaeses, creating
+func (sum *Summarizer) Summarize() ([]Summary, error) {
 
-func (sum *Summarizer) Summarize() error {
-	rawSettings, err := sum.SqlExecutor.GetSettingsRawOrderedByVersion()
-	if err != nil {
-		return err
-	}
-	summary := Summary{}
-	for _, rs := range rawSettings {
-		// New summary if variable has changed
-		if summary.Variable != rs.Variable {
-			// Persist summary and create a new one
-			sum.SqlExecutor.UpsertSummary(summary)
-			summary = *NewSummaryFromRaw(rs)
-		} else { // otherwise process
-			// Value change
-			if summary.Value != rs.Value {
-				summary.ValueChanges = append(summary.ValueChanges, Change{Release: rs.ReleaseName, From: summary.Value, To: rs.Value})
-				summary.Value = rs.Value
-			}
-
-			// Description change
-			if summary.Description != rs.Description {
-				summary.DescriptionChanges = append(summary.DescriptionChanges, Change{Release: rs.ReleaseName, From: summary.Description, To: rs.Description})
-				summary.Description = rs.Description
-
-			}
+	sum.RawSettings.Sort()
+	variables := sum.RawSettings.SortedVariables()
+	summaries := make([]Summary, 0)
+	for _, v := range variables {
+		meta := sum.RawSettings.MetaForVariable(v, sum.Releases)
+		s := Summary{
+			Variable:           meta.mostRecent.Variable,
+			Value:              meta.mostRecent.Value,
+			Type:               meta.mostRecent.Type,
+			Public:             meta.mostRecent.Public,
+			Description:        meta.mostRecent.Description,
+			DefaultValue:       meta.mostRecent.DefaultValue,
+			Origin:             meta.mostRecent.Origin,
+			Key:                meta.mostRecent.Key,
+			FirstReleases:      meta.firstReleases,
+			LastReleases:       meta.lastReleases,
+			HostDependent:      meta.hostDependent,
+			ValueChanges:       meta.valueChanges,
+			DescriptionChanges: meta.descriptionChanges,
 		}
+		summaries = append(summaries, s)
 	}
 
-	// Persist last summary
-	sum.SqlExecutor.UpsertSummary(summary)
+	return summaries, nil
 }
